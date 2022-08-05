@@ -1,11 +1,12 @@
 require("dotenv").config();
 const express = require("express");
-
+const Student = require("./models/student");
 const Attendance = require("./models/attendance");
 const Batches = require("./models/batches");
 const Info = require("./models/info");
+const SuperUser=require('./models/superuser')
 require("./db/mongoose");
-
+  
 const app = express();
 app.use(express.json());
 
@@ -43,9 +44,28 @@ app.get("/", async (req, res) => {
   ]);
 
   res.send(batches);
-  res.send(batches);
+  
 });
-app.post("/addAttendance", async (req, res) => {
+
+app.get("/student", async (req, res) => {
+  try {
+    const students = await Student.find({});
+    res.send(students);
+  } catch (e) {
+    res.send("there is some error");
+  }
+});
+app.post("/student/addStudent", async (req, res) => {
+  const student = new Student(req.body);
+  try {
+    await student.save();
+    res.send(student);
+  } catch (e) {
+    res.send("there is some error!");
+  }
+});
+
+app.post("/attendance/addAttendance", async (req, res) => {
   try {
     const total = await Attendance.find({ rollno: req.body.rollno }).sort({
       totalDays: -1,
@@ -76,22 +96,31 @@ app.post("/addAttendance", async (req, res) => {
     res.status(500).send(error);
   }
 });
-app.get("/getData", async (req, res) => {
+app.get("/attendance/getAbsent", async (req, res) => {
+  const { date, present, batch, branch, sem } = req.body;
   try {
-    const data = await Attendance.find(req.body);
-    const studentList = data.map((student) => {
-      return {
-        name: student.name,
-        rollno: student.rollno,
-      };
+    const data = await Attendance.find({ date, present });
+
+    const rollNums = data.map((student) => student.rollno);
+    console.log(rollNums);
+
+    const studentsList = await Student.find({
+      rollno: { $in: rollNums },
+      batch,
+      branch,
+      sem,
     });
-    res.send(studentList);
+    if (studentsList.length === 0)
+      return res.status(404).send("Data Not Found");
+
+    res.send(studentsList);
   } catch (error) {
     res.status(404).send("No data found");
   }
 });
 
-app.get("/checkAttendanceStatus", async (req, res) => {
+app.get("/attendance/checkAttendanceStatus", async (req, res) => {
+  const { batch, branch, sem } = req.body;
   // (in find method)in req.body if key name is same as our model's key name then it will find the same object which has this key else just ignores the key
   const maxDay = await Attendance.find(req.body).sort({ totalDays: -1 });
 
@@ -103,19 +132,13 @@ app.get("/checkAttendanceStatus", async (req, res) => {
 
   const Data = maxDay
     .filter((student) => {
-      return (
-        student.totalDays === totaldays &&
-        student.attendance > req.body.attendancePR
-      );
+      return student.totalDays === totaldays && student.attendance < 75;
     })
-    .map((student) => {
-      return {
-        name: student.name,
-        rollno: student.rollno,
-        attendance: student.attendance,
-      };
-    });
-  res.send(Data);
+    .map((student) => student.rollno);
+    const studentsList = await Student.find({ rollno: { $in: Data }, batch, branch, sem });
+
+  if (Data.length === 0) return res.send("No data found!");
+  res.send(studentsList);
 });
 
 app.get("/getInfo", async (req, res) => {
@@ -181,6 +204,19 @@ app.post("/addInfo", async (req, res) => {
     res.send();
   }
 });
+app.post('/superUser', async (req, res) => {
+  const user = new SuperUser(req.body)
+
+  try {
+      await user.save()
+      
+   
+      const token = await user.generateAuthToken()
+      res.status(201).send({ user, token })
+  } catch (e) {
+      res.status(400).send(e)
+  }
+})
 app.listen(port, () => {
   console.log(`Server is up on port ${port}!`);
 });

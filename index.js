@@ -3,10 +3,15 @@ const express = require("express");
 const Student = require("./models/student");
 const Attendance = require("./models/attendance");
 const Batches = require("./models/batches");
+const Superuser = require("./models/superuser.js");
+const bcrypt = require("bcryptjs");
+
 const Info = require("./models/info");
-const SuperUser=require('./models/superuser')
+
+const auth = require("./middleware/auth");
+const SuperUser = require("./models/superuser");
 require("./db/mongoose");
-  
+
 const app = express();
 app.use(express.json());
 
@@ -44,18 +49,9 @@ app.get("/", async (req, res) => {
   ]);
 
   res.send(batches);
-  
 });
 
-app.get("/student", async (req, res) => {
-  try {
-    const students = await Student.find({});
-    res.send(students);
-  } catch (e) {
-    res.send("there is some error");
-  }
-});
-app.post("/student/addStudent", async (req, res) => {
+app.post("/student/addStudent", auth, async (req, res) => {
   const student = new Student(req.body);
   try {
     await student.save();
@@ -65,8 +61,9 @@ app.post("/student/addStudent", async (req, res) => {
   }
 });
 
-app.post("/attendance/addAttendance", async (req, res) => {
+app.post("/attendance/addAttendance", auth, async (req, res) => {
   try {
+ 
     const total = await Attendance.find({ rollno: req.body.rollno }).sort({
       totalDays: -1,
     });
@@ -96,7 +93,8 @@ app.post("/attendance/addAttendance", async (req, res) => {
     res.status(500).send(error);
   }
 });
-app.get("/attendance/getAbsent", async (req, res) => {
+
+app.get("/attendance/getAbsent", auth, async (req, res) => {
   const { date, present, batch, branch, sem } = req.body;
   try {
     const data = await Attendance.find({ date, present });
@@ -119,10 +117,16 @@ app.get("/attendance/getAbsent", async (req, res) => {
   }
 });
 
-app.get("/attendance/checkAttendanceStatus", async (req, res) => {
+app.get("/attendance/checkAttendanceStatus", auth, async (req, res) => {
   const { batch, branch, sem } = req.body;
   // (in find method)in req.body if key name is same as our model's key name then it will find the same object which has this key else just ignores the key
-  const maxDay = await Attendance.find(req.body).sort({ totalDays: -1 });
+  const students = await Student.find({ batch, branch, sem });
+
+  const rollNums = students.map((student) => student.rollno);
+
+  const maxDay = await Attendance.find({ rollno: { $in: rollNums } }).sort({
+    totalDays: -1,
+  });
 
   if (maxDay.length === 0) {
     return res.status(400).send("No data found");
@@ -132,22 +136,24 @@ app.get("/attendance/checkAttendanceStatus", async (req, res) => {
 
   const Data = maxDay
     .filter((student) => {
-      return student.totalDays === totaldays && student.attendance < 75;
+      return student.totalDays === totaldays && student.attendance < req.body.attendance;
     })
     .map((student) => student.rollno);
-    const studentsList = await Student.find({ rollno: { $in: Data }, batch, branch, sem });
+ 
 
   if (Data.length === 0) return res.send("No data found!");
-  res.send(studentsList);
+  res.send(Data);
 });
 
-app.get("/getInfo", async (req, res) => {
+app.get("/seatInfo/getInfo", auth, async (req, res) => {
   let data = await Info.find({});
   let totalStudents = 0;
   let totalStudentsIntake = 0;
   let availableIntake = 0;
   let batch = req.body.batch;
-
+  if (data.length === 0) {
+    return res.send("there is No data available!!");
+  }
   data.forEach((obj) => {
     obj.branches.forEach((ele) => {
       totalStudents += ele.totalStudents;
@@ -176,7 +182,7 @@ app.get("/getInfo", async (req, res) => {
   });
 });
 
-app.post("/addInfo", async (req, res) => {
+app.post("/seatInfo/addInfo", auth, async (req, res) => {
   let branchesForBatch = await Info.find({ batch: req.body.batch });
 
   console.log(branchesForBatch.length);
@@ -200,23 +206,50 @@ app.post("/addInfo", async (req, res) => {
       res.send(branchesForBatch);
     }
   } catch (e) {
-    console.log("there is some error!!");
-    res.send();
+    res.send("there is some error!!");
   }
 });
-app.post('/superUser', async (req, res) => {
-  const user = new SuperUser(req.body)
 
+app.post("/admin/addAdmin", async (req, res) => {
   try {
-      await user.save()
-      
-   
-      const token = await user.generateAuthToken()
-      res.status(201).send({ user, token })
-  } catch (e) {
-      res.status(400).send(e)
+    const admin = new Superuser(req.body);
+    admin.password = await bcrypt.hash(admin.password, 8);
+    await admin.save();
+    await admin.generateAuthToken();
+    res.send({ admin });
+  } catch (error) {
+    res.status(400).send();
   }
-})
+});
+
+app.post("/staff/addSuperUser", auth, async (req, res) => {
+  try {
+    console.log(req.user);
+    if (req.user.email === "admin@admin.com") {
+      const staffMember = new Superuser(req.body);
+      staffMember.password = await bcrypt.hash(staffMember.password, 8);
+      await staffMember.save();
+      await staffMember.generateAuthToken();
+      return res.send({ succes: true, staffMember });
+    }
+    res.status(401).send("Your are not authorized to add staff member!!");
+  } catch (error) {
+    res.status(400).send();
+  }
+});
+
+app.post("/staff/login", async (req, res) => {
+  try {
+    const user = await Superuser.findByCredentials(
+      req.body.email,
+      req.body.password
+    );
+    const token = await user.generateAuthToken();
+    res.send({ login: "success", user, token });
+  } catch (error) {
+    res.status(400).send("Invalid credentials");
+  }
+});
 app.listen(port, () => {
   console.log(`Server is up on port ${port}!`);
 });
